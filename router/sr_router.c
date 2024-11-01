@@ -77,26 +77,23 @@ struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr) {
 }
 
 
-/* Custom method: send packet to next_hop_ip, according to "sr_arpcache.h"
- * Check the ARP cache, send packet or send ARP request */
+/*--------------------------------------------------------------------- 
+ * This method performs an ARP cache lookup for the specified destination 
+ * IP address. If an ARP entry is found, it sends the packet. 
+ * Otherwise, it queues the packet and initiates an ARP request.
+ *---------------------------------------------------------------------*/
 void lookup_and_send_packet(struct sr_instance *sr, uint32_t dst_ip, uint8_t *pkt, unsigned int len, struct sr_if *interface) {
-    struct sr_arpentry* arp_cached = sr_arpcache_lookup(&sr->cache, dst_ip);
-
-    if(arp_cached) {
-        /* if cached, send packet through outgoing interface */
-        printf("ARP mapping cached.\n");
-        sr_ethernet_hdr_t* ehdr = (sr_ethernet_hdr_t*)pkt;
-        /* set destination MAC to the mapped MAC */
-        memcpy(ehdr->ether_dhost, arp_cached->mac, ETHER_ADDR_LEN);
-        /* set the source MAC to the outgoing interface's MAC */
-        memcpy(ehdr->ether_shost, interface->addr, ETHER_ADDR_LEN);
+    struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, dst_ip);
+    if(entry) {
+        memcpy(((sr_ethernet_hdr_t *)pkt)->ether_dhost, entry->mac, sizeof(uint8_t) * ETHER_ADDR_LEN);
+        memcpy(((sr_ethernet_hdr_t *)pkt)->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
         sr_send_packet(sr, pkt, len, interface->name);
-        free(arp_cached);
+        free(entry);
     } else {
         /* if not cached, send ARP request */
         printf("Queue ARP request.\n");
-        struct sr_arpreq* arpreq = sr_arpcache_queuereq(&sr->cache, dst_ip, pkt, len, interface->name);
-        handle_arp_request(sr, arpreq);
+        struct sr_arpreq *req = sr_arpcache_queuereq(&sr->cache, dst_ip, pkt, len, interface->name);
+        handle_arp_request(sr, req);
     }
 }
 
