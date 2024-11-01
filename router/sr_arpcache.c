@@ -44,7 +44,7 @@ void handle_arp_request(struct sr_instance* sr, struct sr_arpreq* req) {
  * Constructs and sends an ARP request for the specified IP address.
  */
 void send_arp_request(struct sr_instance *sr, struct sr_arpreq *req) {
-    struct sr_if* interface = sr_get_interface(sr, req->packets->iface);
+    struct sr_if *my_if = sr_get_interface(sr, req->packets->iface);
     uint8_t *pkt = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
     
     if (!pkt) {
@@ -52,26 +52,25 @@ void send_arp_request(struct sr_instance *sr, struct sr_arpreq *req) {
         return;
     }
 
-    /* construct ARP request ethernet header */
     sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)pkt;
     sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
 
     /* Fill in Ethernet header: dest 0xFF (broadcast)*/
-    memcpy(eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    memcpy(eth_hdr->ether_shost, my_if ->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
     memset(eth_hdr->ether_dhost, 0xFF, sizeof(uint8_t) * ETHER_ADDR_LEN);
     eth_hdr->ether_type = htons(ethertype_arp);
-    
+
     /* Fill in ARP header */
     arp_hdr->ar_hrd = htons(arp_hrd_ethernet);
     arp_hdr->ar_pro = htons(ethertype_ip);
     arp_hdr->ar_hln = 6;
     arp_hdr->ar_pln = 4;
     arp_hdr->ar_op = htons(arp_op_request);
-    memcpy(arp_hdr->ar_sha, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
-    arp_hdr->ar_sip = interface->ip;
+    memcpy(arp_hdr->ar_sha, my_if ->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    arp_hdr->ar_sip = my_if->ip;
     arp_hdr->ar_tip = req->ip;
 
-    sr_send_packet(sr, pkt, sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t), interface->name);
+    sr_send_packet(sr, pkt, sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t), my_if->name);
     
     free(pkt);
 }
@@ -82,18 +81,15 @@ void send_arp_request(struct sr_instance *sr, struct sr_arpreq *req) {
   See the comments in the header file for an idea of what it should look like.
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
-
-    /* this router -> ARP cache -> list of ARP requests */
-    struct sr_arpreq* request = sr->cache.requests;
-
-    /* handle ARP requests one by one, default linked list structure of sr_arpreq in "sr_arpcache.h" */
-    struct sr_arpreq* next;
-    while(request) {
-        next = request->next;
-        handle_arp_request(sr, request);
-        request = next;
-    }
+    struct sr_arpreq *req = sr->cache.requests;
+    struct sr_arpreq *next_req = NULL;
+    
+    while (req) {
+        /*store next_req so dont lose reference to next request when we destroy req*/
+        next_req = req->next;
+        handle_arp_request(sr, req);
+        req = next_req;
+    }    
 }
 
 /* You should not need to touch the rest of this code. */
@@ -152,7 +148,6 @@ struct sr_arpreq *sr_arpcache_queuereq(struct sr_arpcache *cache,
         req->next = cache->requests;
         cache->requests = req;
     }
-
     /* Add the packet to the list of packets for this request */
     if (packet && packet_len && iface) {
         struct sr_packet *new_pkt = (struct sr_packet *)malloc(sizeof(struct sr_packet));
