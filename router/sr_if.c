@@ -54,10 +54,8 @@ struct sr_if* sr_get_interface(struct sr_instance* sr, const char* name)
     return 0;
 } /* -- sr_get_interface -- */
 
-/* Custom method: get interface by specified IP addr
- * modified from the provided 'sr_get_interface' above */
-struct sr_if* sr_get_interface_by_ip(struct sr_instance* sr, uint32_t ip) {
-    struct sr_if* if_walker = 0;
+struct sr_if *sr_get_interface_by_IP(struct sr_instance *sr, uint32_t ip) {
+    struct sr_if *if_walker = 0;
 
     /* -- REQUIRES -- */
     assert(ip);
@@ -65,8 +63,8 @@ struct sr_if* sr_get_interface_by_ip(struct sr_instance* sr, uint32_t ip) {
 
     if_walker = sr->if_list;
 
-    while(if_walker) {
-        if(if_walker->ip == ip) {
+    while (if_walker) {
+        if (if_walker->ip == ip) {
             return if_walker;
         }
         if_walker = if_walker->next;
@@ -74,19 +72,17 @@ struct sr_if* sr_get_interface_by_ip(struct sr_instance* sr, uint32_t ip) {
     return 0;
 }
 
-/* Custom method: get interface by specified MAC addr 
- * modified from the provided 'sr_get_interface' above */
-struct sr_if* sr_get_interface_by_mac(struct sr_instance* sr, unsigned char* addr) {
-    struct sr_if* if_walker = 0;
-    
+struct sr_if *sr_get_interface_by_MAC(struct sr_instance *sr, uint32_t mac) {
+    struct sr_if *if_walker = 0;
+
     /* -- REQUIRES -- */
-    assert(addr);
+    assert(mac);
     assert(sr);
-    
+
     if_walker = sr->if_list;
-    
-    while(if_walker) {
-        if(memcmp(if_walker->addr, addr, ETHER_ADDR_LEN) == 0) {
+
+    while (if_walker) {
+        if(memcmp(if_walker->addr, mac, ETHER_ADDR_LEN) == 0) {
             return if_walker;
         }
         if_walker = if_walker->next;

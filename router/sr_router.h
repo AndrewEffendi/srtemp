@@ -80,4 +80,12 @@ void send_icmp_msg(struct sr_instance*, uint8_t*, unsigned int, uint8_t, uint8_t
 void handle_arp(struct sr_instance*, uint8_t*, unsigned int, char*);
 void handle_ip(struct sr_instance*, uint8_t*, unsigned int, char*);
 
+/* Custom method: convert IP int to string */
+void addr_ip_int(char* buf, uint32_t ip);
+int verify_ip(sr_ip_hdr_t*);
+int verify_icmp(uint8_t*, unsigned int);
+
+/* Custom method */
+struct sr_rt* longest_matching_prefix(struct sr_instance*, uint32_t);
+
 #endif /* SR_ROUTER_H */

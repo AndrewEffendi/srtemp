@@ -52,6 +52,110 @@ void sr_init(struct sr_instance* sr)
 
 } /* -- sr_init -- */
 
+/* Custom method: convert IP int to string */
+/* Basically modified from 'print_addr_ip_int' above */
+void addr_ip_int(char* buf, uint32_t ip) {
+    sprintf(
+        buf,
+        "%d.%d.%d.%d",
+        ip >> 24,
+        (ip << 8) >> 24,
+        (ip << 16) >> 24,
+        (ip << 24) >> 24
+    );
+}
+
+/* Custom method: sanity-check IP packet */
+int verify_ip(sr_ip_hdr_t* ip_hdr) {
+  /* store the received checksum */
+  uint16_t received_checksum = ip_hdr->ip_sum;
+  /* make checksum zero to calculate the true checksum */
+  ip_hdr->ip_sum = 0;
+  uint16_t true_checksum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
+  ip_hdr->ip_sum = received_checksum;
+  /* compare the received checksum and the value it should be */
+  if(received_checksum != true_checksum) {
+      printf("Error: verify_ip: checksum didn't match.\n");
+      return -1;
+  }
+  /* verify the length of IP packet */
+  if(ip_hdr->ip_len < 20) {
+      printf("Error: verify_ip: IP packet too short.\n");
+      return -1;
+  }
+
+  return 0;
+}
+
+/* Custom method: sanity-check ICMP packet */
+int verify_icmp(uint8_t* packet, unsigned int len) {
+  uint8_t* payload = (packet + sizeof(sr_ethernet_hdr_t));
+  sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)payload;
+
+  /* verify the length of header */
+  if(len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_icmp_hdr_t) + (ip_hdr->ip_hl * 4)) {
+    printf("Error: verify_icmp: header too short.\n");
+    return -1;
+  }
+
+  sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+
+  /* verify the checksum */
+  uint16_t received_checksum = icmp_hdr->icmp_sum;
+  icmp_hdr->icmp_sum = 0;
+  uint16_t true_checksum = cksum(icmp_hdr, ntohs(ip_hdr->ip_len) - (ip_hdr->ip_hl * 4));
+  icmp_hdr->icmp_sum = received_checksum;
+  if(received_checksum != true_checksum) {
+    printf("Error: verify_icmp: checksum didn't match.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+/* Custom method: find the routing table entry which has the longest matching prefix with the destination IP addr */
+struct sr_rt* longest_matching_prefix(struct sr_instance* sr, uint32_t ip) {
+    struct sr_rt* longest_prefix_entry = NULL;
+
+    char ip_string[15];
+    addr_ip_int(ip_string, ntohl(ip));
+    fprintf(stderr, "Finding longest prefix for %s ...\n", ip_string);
+
+    struct sr_rt* table_entry = sr->routing_table;
+    while(table_entry) {
+        /* check if the prefix matches our IP */
+        if((table_entry->dest.s_addr & table_entry->mask.s_addr) == (ip & table_entry->mask.s_addr)) {
+            /* check whether to update the longest_prefix_entry */
+            if(!longest_prefix_entry || table_entry->mask.s_addr > longest_prefix_entry->mask.s_addr) {
+                longest_prefix_entry = table_entry;
+            }
+        }
+        table_entry = table_entry->next;
+    }
+
+    /* print the result */
+    if(longest_prefix_entry) {
+        char dest_string[15];
+        addr_ip_int(dest_string, ntohl(longest_prefix_entry->dest.s_addr));
+        char gw_string[15];
+        addr_ip_int(gw_string, ntohl(longest_prefix_entry->gw.s_addr));
+        char mask_string[15];
+        addr_ip_int(mask_string, ntohl(longest_prefix_entry->mask.s_addr));
+        printf(
+            "Found longest matching prefix: {dest:\"%s\",gw:\"%s\",mask:\"%s\",interface:\"%s\"}.\n",
+            dest_string,
+            gw_string,
+            mask_string,
+            longest_prefix_entry->interface
+        );
+    } else {
+        printf("Cannot find any longest matching prefix.\n");
+    }
+
+    return longest_prefix_entry;
+}
+
+
 /* Custom method: send packet to next_hop_ip, according to "sr_arpcache.h"
  * Check the ARP cache, send packet or send ARP request */
 void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, struct sr_if* interface, uint32_t dest_ip) {
@@ -71,7 +175,7 @@ void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, stru
         /* if not cached, send ARP request */
         printf("Queue ARP request.\n");
         struct sr_arpreq* arpreq = sr_arpcache_queuereq(&sr->cache, dest_ip, packet, len, interface->name);
-        handle_arpreq(sr, arpreq);
+        handle_arp_request(sr, arpreq);
     }
 }
 
@@ -99,10 +203,7 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
     struct sr_if* interface = sr_get_interface(sr, rt_entry->interface);
 
     switch(type) {
-        case icmp_type_echo_reply: {
-            /* set ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
-            memset(eth_hdr->ether_shost, 0, ETHER_ADDR_LEN);
-            memset(eth_hdr->ether_dhost, 0, ETHER_ADDR_LEN);
+        case 0: {
 
             /* this ICMP message is a sending-back */
             uint32_t temp = ip_hdr->ip_dst;
@@ -110,6 +211,10 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             ip_hdr->ip_src = temp;
             /* not necessary to recalculate checksum here */
 
+            /* set ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
+            memcpy(eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            
             /* construct ICMP header */
             sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
             icmp_hdr->icmp_type = type;
@@ -122,8 +227,8 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             send_packet(sr, packet, len, interface, rt_entry->gw.s_addr);
             break;
         }
-        case icmp_type_time_exceeded:
-        case icmp_type_dest_unreachable: {
+        case 11:
+        case 3: {
             /* calculate length of the new ICMP packet (illustrated above) */
             unsigned int new_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
             /* construct new ICMP packet */
@@ -139,11 +244,6 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             /* construct type 3 ICMP hdr */
             sr_icmp_t3_hdr_t* icmp_hdr = (sr_icmp_t3_hdr_t*)(new_packet + sizeof(sr_ethernet_hdr_t) + (ip_hdr->ip_hl * 4));
 
-             /* set new ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
-            memset(new_eth_hdr->ether_shost, 0, ETHER_ADDR_LEN);
-            memset(new_eth_hdr->ether_dhost, 0, ETHER_ADDR_LEN);
-            /* set protocol type to IP */
-            new_eth_hdr->ether_type = htons(ethertype_ip);
 
             /* set new IP hdr */
             new_ip_hdr->ip_v    = 4;
@@ -156,9 +256,16 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             new_ip_hdr->ip_p    = ip_protocol_icmp;
             /* if code == 3 (i.e. UDP arrives destination), set source IP to received packet's destination IP */
             /* if others, set source IP to outgoing interface's IP */
-            new_ip_hdr->ip_src = code == icmp_dest_unreachable_port ? ip_hdr->ip_dst : interface->ip;
+            new_ip_hdr->ip_src = code == 3 ? ip_hdr->ip_dst : interface->ip;
             /* set destination IP to received packet's source IP */
             new_ip_hdr->ip_dst = ip_hdr->ip_src;
+            
+            /* set new ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
+            memcpy(new_eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            memcpy(new_eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            
+            /* set protocol type to IP */
+            new_eth_hdr->ether_type = htons(ethertype_ip);
 
             /* recalculate checksum */
             new_ip_hdr->ip_sum = 0;
@@ -292,7 +399,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         printf("Packet destined to this router.\n");
 
         switch(ip_hdr->ip_p) {
-            case ip_protocol_icmp: {
+            case 0x0001: {
                 printf("Packet is an ICMP message.\n");
 
                 if(verify_icmp(packet, len) == -1) {
@@ -302,17 +409,17 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
                 sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
                 /* handle 'ping' echo request */
-                if(icmp_hdr->icmp_type == icmp_type_echo_request) {
-                    send_icmp_msg(sr, packet, len, icmp_type_echo_reply, (uint8_t)0);
+                if(icmp_hdr->icmp_type == 8) {
+                    send_icmp_msg(sr, packet, len, 0, (uint8_t)0);
                 }
 
                 break;
             }
-            case ip_protocol_tcp:
-            case ip_protocol_udp: {
+            case 0x0006:
+            case 0x0011: {
                 printf("Packet is a TCP/UDP message.\n");
                 /* send ICMP msg - type 3 code 3 */
-                send_icmp_msg(sr, packet, len, icmp_type_dest_unreachable, icmp_dest_unreachable_port);
+                send_icmp_msg(sr, packet, len, 3, 3);
                 break;
             }
         }
@@ -326,7 +433,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         ip_hdr->ip_ttl--;
         if(ip_hdr->ip_ttl == 0) {
             printf("TTL decreased to zero.\n");
-            send_icmp_msg(sr, packet, len, icmp_type_time_exceeded, (uint8_t)0);
+            send_icmp_msg(sr, packet, len, 11, (uint8_t)0);
             return;
         }
 
@@ -338,7 +445,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         struct sr_rt* table_entry = longest_matching_prefix(sr, ip_hdr->ip_dst);
         if(!table_entry) {
             printf("Error: handle_ip: destination IP not existed in routing table.\n");
-            send_icmp_msg(sr, packet, len, icmp_type_dest_unreachable, icmp_dest_unreachable_net);
+            send_icmp_msg(sr, packet, len, 3, 0);
             return;
         }
 
