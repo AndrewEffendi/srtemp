@@ -369,32 +369,27 @@ void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *int
     struct sr_if *my_if = sr_get_interface_by_IP(sr, ip_hdr->ip_dst);
 
     if(my_if) {
-        printf("Packet destined to this router.\n");
+        if (ip_hdr->ip_p == 0x0001) {
+            printf("Received ICMP packet.\n");
 
-        switch(ip_hdr->ip_p) {
-            case 0x0001: {
-                printf("Packet is an ICMP message.\n");
-
-                if(verify_icmp(pkt, len) == -1) {
-                    return;
-                }
-
-                sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-
-                /* handle 'ping' echo request */
-                if(icmp_hdr->icmp_type == 8) {
-                    send_icmp_msg(sr, pkt, len, 0, (uint8_t)0);
-                }
-
-                break;
+            /* ICMP */
+            sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+            if (icmp_hdr->icmp_type != 8 || !check_icmp_len_cs(pkt, len)) {
+                /* Unsupported type*/
+                printf("Received unsupported type.\n");
+                return;
             }
-            case 0x0006:
-            case 0x0011: {
-                printf("Packet is a TCP/UDP message.\n");
-                /* send ICMP msg - type 3 code 3 */
-                send_icmp_msg(sr, pkt, len, 3, 3);
-                break;
-            }
+            /*Send ICMP echo reply*/
+            send_icmp_msg(sr, pkt, len, 0, (uint8_t)0);       
+        } else if (ip_hdr->ip_p == 0x0006 || ip_hdr->ip_p == 0x0011) {
+            /* TCP/UDP */
+            /* send error code 3, type 3*/
+            send_icmp_msg(sr, pkt, len, 3, 3);
+            return;
+        } else {
+            /* Unsupported Protocol */
+            printf("Received unsupported protocol.\n");
+            return ;
         }
     } else {
         printf("Packet destined elsewhere.\n");
