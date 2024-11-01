@@ -113,46 +113,28 @@ int verify_icmp(uint8_t* packet, unsigned int len) {
   return 0;
 }
 
-/* Custom method: find the routing table entry which has the longest matching prefix with the destination IP addr */
-struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
-    struct sr_rt* longest_prefix_entry = NULL;
+/*--------------------------------------------------------------------- 
+ * Searches the routing table for the longest prefix match corresponding
+ * to the given destination address.
+ *---------------------------------------------------------------------*/
+struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr) {
+    /* REQUIRES */
+    assert(sr);
+    assert(dest_addr);
 
-    char ip_string[15];
-    addr_ip_int(ip_string, ntohl(ip));
-    fprintf(stderr, "Finding longest prefix for %s ...\n", ip_string);
-
-    struct sr_rt* table_entry = sr->routing_table;
-    while(table_entry) {
-        /* check if the prefix matches our IP */
-        if((table_entry->dest.s_addr & table_entry->mask.s_addr) == (ip & table_entry->mask.s_addr)) {
-            /* check whether to update the longest_prefix_entry */
-            if(!longest_prefix_entry || table_entry->mask.s_addr > longest_prefix_entry->mask.s_addr) {
-                longest_prefix_entry = table_entry;
+    struct sr_rt* walker = sr->routing_table;
+    struct sr_rt *longest = 0;
+    uint32_t len = 0;
+    while(walker) {
+        if ((walker->dest.s_addr & walker->mask.s_addr) == (dest_addr & walker->mask.s_addr)) {
+            if ((walker->mask.s_addr & dest_addr) > len) {
+                len = walker->mask.s_addr & dest_addr;
+                longest = walker;
             }
         }
-        table_entry = table_entry->next;
+        walker = walker->next;
     }
-
-    /* print the result */
-    if(longest_prefix_entry) {
-        char dest_string[15];
-        addr_ip_int(dest_string, ntohl(longest_prefix_entry->dest.s_addr));
-        char gw_string[15];
-        addr_ip_int(gw_string, ntohl(longest_prefix_entry->gw.s_addr));
-        char mask_string[15];
-        addr_ip_int(mask_string, ntohl(longest_prefix_entry->mask.s_addr));
-        printf(
-            "Found longest matching prefix: {dest:\"%s\",gw:\"%s\",mask:\"%s\",interface:\"%s\"}.\n",
-            dest_string,
-            gw_string,
-            mask_string,
-            longest_prefix_entry->interface
-        );
-    } else {
-        printf("Cannot find any longest matching prefix.\n");
-    }
-
-    return longest_prefix_entry;
+    return longest;
 }
 
 
@@ -393,45 +375,37 @@ void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *int
         }
     } else {
         /* forward */
-        forward_ip(sr, pkt, len, interface);
+        forward_ip(sr, pkt, len);
     }
 }
 
 /*---------------------------------------------------------------------
  * Forward packet using longest prefix match
  *---------------------------------------------------------------------*/
-void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface) {
-    /* construct IP hdr (bypass Ethernet hdr) */
+void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
     sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t));
 
-    /* decrease TTL */
+    /* Decrement TTL and check */
     ip_hdr->ip_ttl--;
-    if(ip_hdr->ip_ttl == 0) {
-        printf("TTL decreased to zero.\n");
+    if (ip_hdr->ip_ttl == 0) {
         send_icmp_msg(sr, pkt, len, 11, (uint8_t)0);
-        return;
+        return; /* Exit if TTL expired */
     }
 
-    /* recalculate checksum */
+    /* Recalculate IP checksum */
     ip_hdr->ip_sum = 0;
-    ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
+    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
 
-    /* lookup destination IP in routing table */
-    struct sr_rt* table_entry = longest_prefix_match(sr, ip_hdr->ip_dst);
-    if(!table_entry) {
-        printf("Error: handle_ip: destination IP not existed in routing table.\n");
+    /* Find longest prefix match */
+    struct sr_rt *route = longest_prefix_match(sr, ip_hdr->ip_dst);
+    if (route) {
+        /* find routing table indicated interface */
+        struct sr_if* interface = sr_get_interface(sr, route->interface);
+        send_packet(sr, pkt, len, interface, route->gw.s_addr);
+    } else {
+        /*LPM not found, send error type 3 code 0*/
         send_icmp_msg(sr, pkt, len, 3, 0);
-        return;
     }
-
-    /* find routing table indicated interface */
-    struct sr_if* rt_out_interface = sr_get_interface(sr, table_entry->interface);
-    if(!rt_out_interface) {
-        printf("Error: handle_ip: interface \'%s\' not found.\n", table_entry->interface);
-        return;
-    }
-
-    send_packet(sr, pkt, len, rt_out_interface, table_entry->gw.s_addr);
 }
 
 /*---------------------------------------------------------------------
