@@ -97,6 +97,40 @@ void lookup_and_send_packet(struct sr_instance *sr, uint32_t dst_ip, uint8_t *pk
     }
 }
 
+void send_icmp_echo_reply(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
+    sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(pkt);
+    sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
+    sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)(pkt + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
+
+    struct sr_rt* lpm = longest_prefix_match(sr, ip_hdr->ip_src);
+    if(!lpm) {
+        printf("Error: longest prefix match not found.\n");
+        return;
+    }
+
+    struct sr_if* my_if = sr_get_interface(sr, lpm->interface);
+
+    /* Swap IP addresses to send back*/
+    uint32_t temp_ip = ip_hdr->ip_dst;
+    ip_hdr->ip_dst = ip_hdr->ip_src;
+    ip_hdr->ip_src = temp_ip;
+
+
+    /* set ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
+    memcpy(eth_hdr->ether_shost, my_if->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    
+    /* Prepare ICMP header */
+    icmp_hdr->icmp_type = 0;
+    icmp_hdr->icmp_code = 0;
+    icmp_hdr->icmp_sum = 0;
+    icmp_hdr->icmp_sum = cksum(icmp_hdr, ntohs(ip_hdr->ip_len) - (ip_hdr->ip_hl * 4));
+
+    /* look up arp cache and send packet */ 
+    lookup_and_send_packet(sr, lpm->gw.s_addr, pkt, len, my_if);
+}
+
+
 /* Custom method: send an ICMP message */
 void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, uint8_t type, uint8_t code) {
     /* New packet illustration:
@@ -298,7 +332,7 @@ void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *int
                 return;
             }
             /*Send ICMP echo reply*/
-            send_icmp_msg(sr, pkt, len, 0, (uint8_t)0);       
+            send_icmp_echo_reply(sr, pkt, len);       
         } else if (ip_hdr->ip_p == 0x0006 || ip_hdr->ip_p == 0x0011) {
             /* TCP/UDP */
             /* send error code 3, type 3*/
