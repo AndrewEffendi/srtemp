@@ -85,6 +85,7 @@ void send_packet(struct sr_instance*, uint8_t*, unsigned int, struct sr_if*, uin
 void send_icmp_msg(struct sr_instance*, uint8_t*, unsigned int, uint8_t, uint8_t);
 void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned int len);
 void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface);
+void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface);
 struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr);
 
 /* Custom method: convert IP int to string */

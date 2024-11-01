@@ -392,40 +392,46 @@ void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *int
             return ;
         }
     } else {
-        printf("Packet destined elsewhere.\n");
-
-        /* construct IP hdr (bypass Ethernet hdr) */
-        sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t));
-
-        /* decrease TTL */
-        ip_hdr->ip_ttl--;
-        if(ip_hdr->ip_ttl == 0) {
-            printf("TTL decreased to zero.\n");
-            send_icmp_msg(sr, pkt, len, 11, (uint8_t)0);
-            return;
-        }
-
-        /* recalculate checksum */
-        ip_hdr->ip_sum = 0;
-        ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
-
-        /* lookup destination IP in routing table */
-        struct sr_rt* table_entry = longest_prefix_match(sr, ip_hdr->ip_dst);
-        if(!table_entry) {
-            printf("Error: handle_ip: destination IP not existed in routing table.\n");
-            send_icmp_msg(sr, pkt, len, 3, 0);
-            return;
-        }
-
-        /* find routing table indicated interface */
-        struct sr_if* rt_out_interface = sr_get_interface(sr, table_entry->interface);
-        if(!rt_out_interface) {
-            printf("Error: handle_ip: interface \'%s\' not found.\n", table_entry->interface);
-            return;
-        }
-
-        send_packet(sr, pkt, len, rt_out_interface, table_entry->gw.s_addr);
+        /* forward */
+        forward_ip(sr, pkt, len, interface);
     }
+}
+
+/*---------------------------------------------------------------------
+ * Forward packet using longest prefix match
+ *---------------------------------------------------------------------*/
+void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface) {
+    /* construct IP hdr (bypass Ethernet hdr) */
+    sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t));
+
+    /* decrease TTL */
+    ip_hdr->ip_ttl--;
+    if(ip_hdr->ip_ttl == 0) {
+        printf("TTL decreased to zero.\n");
+        send_icmp_msg(sr, pkt, len, 11, (uint8_t)0);
+        return;
+    }
+
+    /* recalculate checksum */
+    ip_hdr->ip_sum = 0;
+    ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
+
+    /* lookup destination IP in routing table */
+    struct sr_rt* table_entry = longest_prefix_match(sr, ip_hdr->ip_dst);
+    if(!table_entry) {
+        printf("Error: handle_ip: destination IP not existed in routing table.\n");
+        send_icmp_msg(sr, pkt, len, 3, 0);
+        return;
+    }
+
+    /* find routing table indicated interface */
+    struct sr_if* rt_out_interface = sr_get_interface(sr, table_entry->interface);
+    if(!rt_out_interface) {
+        printf("Error: handle_ip: interface \'%s\' not found.\n", table_entry->interface);
+        return;
+    }
+
+    send_packet(sr, pkt, len, rt_out_interface, table_entry->gw.s_addr);
 }
 
 /*---------------------------------------------------------------------
