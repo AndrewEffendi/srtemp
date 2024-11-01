@@ -57,10 +57,6 @@ void sr_init(struct sr_instance* sr)
  * to the given destination address.
  *---------------------------------------------------------------------*/
 struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr) {
-    /* REQUIRES */
-    assert(sr);
-    assert(dest_addr);
-
     struct sr_rt* walker = sr->routing_table;
     struct sr_rt *longest = 0;
     uint32_t len = 0;
@@ -97,6 +93,9 @@ void lookup_and_send_packet(struct sr_instance *sr, uint32_t dst_ip, uint8_t *pk
     }
 }
 
+/*---------------------------------------------------------- 
+ * Constructs and sends an ICMP Type 0 (echo reply) packet. 
+ *----------------------------------------------------------*/
 void send_icmp_echo_reply(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
     sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(pkt);
     sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
@@ -131,14 +130,11 @@ void send_icmp_echo_reply(struct sr_instance *sr, uint8_t *pkt, unsigned int len
 }
 
 
-/* Custom method: send an ICMP message */
-void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, uint8_t type, uint8_t code) {
-    /* New packet illustration:
-                |<- Ethernet hdr ->|<- IP hdr ->|<- ICMP hdr ->|
-                ^
-             *packet
-    */
-    /* construct ethernet header from packet */
+/*--------------------------------------------------------------------- 
+ * Constructs and sends an ICMP Type 3 (Destination Unreachable) error 
+ * message.
+ *---------------------------------------------------------------------*/
+void send_icmp_error(struct sr_instance *sr, uint8_t *packet, unsigned int len, uint8_t type, uint8_t code) {
     sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
     /* construct IP header from packet */
     sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
@@ -153,90 +149,60 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
 
     /* get outgoing interface */
     struct sr_if* interface = sr_get_interface(sr, rt_entry->interface);
+       
+    /* calculate length of the new ICMP packet (illustrated above) */
+    unsigned int new_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
+    /* construct new ICMP packet */
+    uint8_t* new_packet = malloc(new_len);
 
-    switch(type) {
-        case 0: {
+    /* sanity check */
+    assert(new_packet);
 
-            /* this ICMP message is a sending-back */
-            uint32_t temp = ip_hdr->ip_dst;
-            ip_hdr->ip_dst = ip_hdr->ip_src;
-            ip_hdr->ip_src = temp;
-            /* not necessary to recalculate checksum here */
-
-            /* set ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
-            memcpy(eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
-            memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
-            
-            /* construct ICMP header */
-            sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-            icmp_hdr->icmp_type = type;
-            icmp_hdr->icmp_code = code;
-
-            /* compute ICMP checksum */
-            icmp_hdr->icmp_sum = 0;
-            icmp_hdr->icmp_sum = cksum(icmp_hdr, ntohs(ip_hdr->ip_len) - (ip_hdr->ip_hl * 4));
-            
-            lookup_and_send_packet(sr, rt_entry->gw.s_addr, packet, len, interface);
-            break;
-        }
-        case 11:
-        case 3: {
-            /* calculate length of the new ICMP packet (illustrated above) */
-            unsigned int new_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
-            /* construct new ICMP packet */
-            uint8_t* new_packet = malloc(new_len);
-
-            /* sanity check */
-            assert(new_packet);
-
-            /* construct ethernet hdr */
-            sr_ethernet_hdr_t* new_eth_hdr = (sr_ethernet_hdr_t*)new_packet;
-            /* construct IP hdr */
-            sr_ip_hdr_t* new_ip_hdr = (sr_ip_hdr_t*)(new_packet + sizeof(sr_ethernet_hdr_t));
-            /* construct type 3 ICMP hdr */
-            sr_icmp_t3_hdr_t* icmp_hdr = (sr_icmp_t3_hdr_t*)(new_packet + sizeof(sr_ethernet_hdr_t) + (ip_hdr->ip_hl * 4));
+    /* construct ethernet hdr */
+    sr_ethernet_hdr_t* new_eth_hdr = (sr_ethernet_hdr_t*)new_packet;
+    /* construct IP hdr */
+    sr_ip_hdr_t* new_ip_hdr = (sr_ip_hdr_t*)(new_packet + sizeof(sr_ethernet_hdr_t));
+    /* construct type 3 ICMP hdr */
+    sr_icmp_t3_hdr_t* icmp_hdr = (sr_icmp_t3_hdr_t*)(new_packet + sizeof(sr_ethernet_hdr_t) + (ip_hdr->ip_hl * 4));
 
 
-            /* set new IP hdr */
-            new_ip_hdr->ip_v    = 4;
-            new_ip_hdr->ip_hl   = sizeof(sr_ip_hdr_t) / 4;
-            new_ip_hdr->ip_tos  = 0;
-            new_ip_hdr->ip_len  = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-            new_ip_hdr->ip_id   = htons(0);
-            new_ip_hdr->ip_off  = htons(IP_DF);
-            new_ip_hdr->ip_ttl  = 255;
-            new_ip_hdr->ip_p    = ip_protocol_icmp;
-            /* if code == 3 (i.e. UDP arrives destination), set source IP to received packet's destination IP */
-            /* if others, set source IP to outgoing interface's IP */
-            new_ip_hdr->ip_src = code == 3 ? ip_hdr->ip_dst : interface->ip;
-            /* set destination IP to received packet's source IP */
-            new_ip_hdr->ip_dst = ip_hdr->ip_src;
-            
-            /* set new ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
-            memcpy(new_eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
-            memcpy(new_eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
-            
-            /* set protocol type to IP */
-            new_eth_hdr->ether_type = htons(ethertype_ip);
+    /* set new IP hdr */
+    new_ip_hdr->ip_v    = 4;
+    new_ip_hdr->ip_hl   = sizeof(sr_ip_hdr_t) / 4;
+    new_ip_hdr->ip_tos  = 0;
+    new_ip_hdr->ip_len  = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+    new_ip_hdr->ip_id   = htons(0);
+    new_ip_hdr->ip_off  = htons(IP_DF);
+    new_ip_hdr->ip_ttl  = 255;
+    new_ip_hdr->ip_p    = ip_protocol_icmp;
+    /* if code == 3 (i.e. UDP arrives destination), set source IP to received packet's destination IP */
+    /* if others, set source IP to outgoing interface's IP */
+    new_ip_hdr->ip_src = code == 3 ? ip_hdr->ip_dst : interface->ip;
+    /* set destination IP to received packet's source IP */
+    new_ip_hdr->ip_dst = ip_hdr->ip_src;
+    
+    /* set new ethernet header source MAC & destination MAC: 00-00-00-00-00-00 */
+    memcpy(new_eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    memcpy(new_eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    
+    /* set protocol type to IP */
+    new_eth_hdr->ether_type = htons(ethertype_ip);
 
-            /* recalculate checksum */
-            new_ip_hdr->ip_sum = 0;
-            new_ip_hdr->ip_sum = cksum(new_ip_hdr, sizeof(sr_ip_hdr_t));
+    /* recalculate checksum */
+    new_ip_hdr->ip_sum = 0;
+    new_ip_hdr->ip_sum = cksum(new_ip_hdr, sizeof(sr_ip_hdr_t));
 
-            /* set type 3 ICMP hdr */
-            icmp_hdr->icmp_type = type;
-            icmp_hdr->icmp_code = code;
-            icmp_hdr->unused = 0;
-            icmp_hdr->next_mtu = 0;
-            memcpy(icmp_hdr->data, ip_hdr, ICMP_DATA_SIZE);
-            icmp_hdr->icmp_sum = 0;
-            icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
+    /* set type 3 ICMP hdr */
+    icmp_hdr->icmp_type = type;
+    icmp_hdr->icmp_code = code;
+    icmp_hdr->unused = 0;
+    icmp_hdr->next_mtu = 0;
+    memcpy(icmp_hdr->data, ip_hdr, ICMP_DATA_SIZE);
+    icmp_hdr->icmp_sum = 0;
+    icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
 
-            lookup_and_send_packet(sr, rt_entry->gw.s_addr, new_packet, new_len, interface);
-            free(new_packet);
-            break;
-        }
-    }
+    lookup_and_send_packet(sr, rt_entry->gw.s_addr, new_packet, new_len, interface);
+    free(new_packet);  
 }
 
 /*---------------------------------------------------------------------
@@ -336,7 +302,7 @@ void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *int
         } else if (ip_hdr->ip_p == 0x0006 || ip_hdr->ip_p == 0x0011) {
             /* TCP/UDP */
             /* send error code 3, type 3*/
-            send_icmp_msg(sr, pkt, len, 3, 3);
+            send_icmp_error(sr, pkt, len, 3, 3);
             return;
         } else {
             /* Unsupported Protocol */
@@ -358,7 +324,7 @@ void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
     /* Decrement TTL and check */
     ip_hdr->ip_ttl--;
     if (ip_hdr->ip_ttl == 0) {
-        send_icmp_msg(sr, pkt, len, 11, (uint8_t)0);
+        send_icmp_error(sr, pkt, len, 11, (uint8_t)0);
         return; /* Exit if TTL expired */
     }
 
@@ -374,7 +340,7 @@ void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
         lookup_and_send_packet(sr, route->gw.s_addr, pkt, len, interface);
     } else {
         /*LPM not found, send error type 3 code 0*/
-        send_icmp_msg(sr, pkt, len, 3, 0);
+        send_icmp_error(sr, pkt, len, 3, 0);
     }
 }
 

@@ -76,8 +76,9 @@ void ip_header(sr_ip_hdr_t *ip_hdr, uint32_t src_ip, uint32_t dst_ip, uint16_t l
 void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned int len);
 void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface);
 void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len);
-void send_packet(struct sr_instance*, uint8_t*, unsigned int, struct sr_if*, uint32_t);
-void send_icmp_msg(struct sr_instance*, uint8_t*, unsigned int, uint8_t, uint8_t);
+void lookup_and_send_packet(struct sr_instance *sr, uint32_t dst_ip, uint8_t *pkt, unsigned int len, struct sr_if *interface);
+void send_icmp_echo_reply(struct sr_instance *sr, uint8_t *pkt,  unsigned int len);
+void send_icmp_error(struct sr_instance *sr, uint8_t *pkt, unsigned int len, uint8_t type, uint8_t code);
 struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr);
 
 /* -- sr_if.c -- */
