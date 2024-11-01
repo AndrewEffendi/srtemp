@@ -77,8 +77,8 @@ void sr_print_if_list(struct sr_instance* );
 /* Custom methods */
 void send_packet(struct sr_instance*, uint8_t*, unsigned int, struct sr_if*, uint32_t);
 void send_icmp_msg(struct sr_instance*, uint8_t*, unsigned int, uint8_t, uint8_t);
-void handle_arp(struct sr_instance*, uint8_t*, unsigned int, char*);
-void handle_ip(struct sr_instance*, uint8_t*, unsigned int, char*);
+void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned int len);
+void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface);
 
 /* Custom method: convert IP int to string */
 void addr_ip_int(char* buf, uint32_t ip);

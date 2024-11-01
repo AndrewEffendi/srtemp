@@ -287,96 +287,72 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
     }
 }
 
-/* Custom method: handle ARP packet */
-void handle_arp(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface) {
-    printf("Received ARP packet.\n");
+/*---------------------------------------------------------------------
+ * This method processes incoming ARP packets received on a specified
+ * interface. It sends replies for ARP requests, updates the ARP cache
+ * for ARP replies
+ *---------------------------------------------------------------------*/
+void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned int len) {
+    sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
 
-    /* store the content of the ARP hdr (bypass the Ethernet hdr) */
-    sr_arp_hdr_t* arp_hdr = (sr_arp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
+    /* Get the interface associated with the incoming ARP request's target IP */
+    struct sr_if *my_if = sr_get_interface_by_ip(sr, arp_hdr->ar_tip);
 
-    /* verify hardware format code */
-    if(ntohs(arp_hdr->ar_hrd) != arp_hrd_ethernet) {
-        printf("Error: handle_arp: packet is not an Ethernet frame.\n");
-        return;
-    }
+    if (my_if) {
+        if (ntohs(arp_hdr->ar_op) == arp_op_request) {
+            /*ARP Request*/
 
-    /* verify Ethernet protocol type */
-    if(ntohs(arp_hdr->ar_pro) != ethertype_ip) {
-        printf("Error: handle_arp: packet is not an IP packet.\n");
-        return;
-    }
+            /*Get the interface for the incoming ARP request*/
+            struct sr_if *in_if = sr_get_interface(sr, interface);
 
-    /* verify that destination IP is on this router */
-    struct sr_if* out_interface = sr_get_interface_by_ip(sr, arp_hdr->ar_tip);
-    if(!out_interface) {
-        printf("Error: handle_arp: destination IP not on this router.\n");
-        return;
-    }
+            /*Construct ARP Reply*/
+            uint8_t *reply_pkt = malloc(len);
+            memcpy(reply_pkt, pkt, len);
 
-    switch(ntohs(arp_hdr->ar_op)) {
-        case arp_op_request: {
-            printf("Received ARP packet - ARP request.\n");
+            sr_ethernet_hdr_t *reply_eth_hdr = (sr_ethernet_hdr_t *)(reply_pkt);
+            memcpy(reply_eth_hdr->ether_dhost, reply_eth_hdr->ether_shost,  sizeof(uint8_t) * ETHER_ADDR_LEN);
+            memcpy(reply_eth_hdr->ether_shost, in_if, sizeof(uint8_t) * ETHER_ADDR_LEN);
 
-            /* store the incoming interface */
-            struct sr_if* in_interface = sr_get_interface(sr, interface);
+            sr_arp_hdr_t *reply_arp_hdr = (sr_arp_hdr_t *)(reply_pkt + sizeof(sr_ethernet_hdr_t));
+            reply_arp_hdr->ar_op = htons(arp_op_reply);
+            memcpy(reply_arp_hdr->ar_sha, in_if->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            reply_arp_hdr->ar_sip = in_if->ip;
+            memcpy(reply_arp_hdr->ar_tha, arp_hdr->ar_sha, sizeof(uint8_t) * ETHER_ADDR_LEN);
+            reply_arp_hdr->ar_tip = arp_hdr->ar_sip;
 
-            /* copy the ARP request */
-            uint8_t* arp_req = malloc(len);
-            memcpy(arp_req, packet, len);
+            send_packet(sr, reply_pkt, len, in_if, arp_hdr->ar_sip);
+            free(reply_pkt);
 
-            /* construct Ethernet hdr */
-            sr_ethernet_hdr_t* arp_req_eth_hdr = (sr_ethernet_hdr_t*)arp_req;
-            /* set destination MAC to be source MAC */
-            memcpy(arp_req_eth_hdr->ether_dhost, arp_req_eth_hdr->ether_shost, ETHER_ADDR_LEN);
-            /* set source MAC to be incoming interface's MAC */
-            memcpy(arp_req_eth_hdr->ether_shost, in_interface, ETHER_ADDR_LEN);
+        } else if (htons(arp_hdr->ar_op) == arp_op_reply) {
+            /*ARP Reply*/
+            /*Update Arp cache*/
+            struct sr_arpreq *req = sr_arpcache_insert(&sr->cache, arp_hdr->ar_sha, arp_hdr->ar_sip);
 
-            /* construct ARP hdr */
-            sr_arp_hdr_t* arp_req_arp_hdr = (sr_arp_hdr_t*)(arp_req + sizeof(sr_ethernet_hdr_t));
-            arp_req_arp_hdr->ar_op = htons(arp_op_reply);
-            /* set sender MAC to be incoming interface's MAC */
-            memcpy(arp_req_arp_hdr->ar_sha, in_interface->addr, ETHER_ADDR_LEN);
-            /* set sender IP to be incoming interface's IP */
-            arp_req_arp_hdr->ar_sip = in_interface->ip;
-            /* set target MAC to be received packet's sender MAC */
-            memcpy(arp_req_arp_hdr->ar_tha, arp_hdr->ar_sha, ETHER_ADDR_LEN);
-            /* set target IP to be received packet's sender IP */
-            arp_req_arp_hdr->ar_tip = arp_hdr->ar_sip;
-
-            send_packet(sr, arp_req, len, in_interface, arp_hdr->ar_sip);
-            free(arp_req);
-
-            break;
-        }
-        case arp_op_reply: {
-            printf("Received ARP packet - ARP reply.\n");
-
-            struct sr_arpreq* cached = sr_arpcache_insert(&sr->cache, arp_hdr->ar_sha, arp_hdr->ar_sip);
-
-            if(cached) {
-                struct sr_packet* packet = cached->packets;
+            if(req) {
+                struct sr_packet* packet = req->packets;
 
                 struct sr_if* in_interface;
                 sr_ethernet_hdr_t* eth_hdr;
 
+                /*Send Outstanding packets*/
                 while(packet) {
                     in_interface = sr_get_interface(sr, packet->iface);
                     if(in_interface) {
-                        /* construct Ethernet hdr */
                         eth_hdr = (sr_ethernet_hdr_t*)(packet->buf);
-                        /* set destination MAC to be received packet's sender MAC */
                         memcpy(eth_hdr->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
-                        /* set source MAC to be incoming interface's MAC */
                         memcpy(eth_hdr->ether_shost, in_interface->addr, ETHER_ADDR_LEN);
-
                         sr_send_packet(sr, packet->buf, packet->len, packet->iface);
                     }
                     packet = packet->next;
                 }
-                sr_arpreq_destroy(&sr->cache, cached);
+                sr_arpreq_destroy(&sr->cache, req);
             }
-            break;
+        } else {
+            printf("Unrecognized ARP OP Code.\n");
+            return;
         }
+    }else {
+        printf("No matching interface found.\n");
     }
 }
 
@@ -499,11 +475,13 @@ void sr_handlepacket(struct sr_instance* sr,
     switch (ethertype(packet)) {
         /* ARP packet */
         case ethertype_arp: {
-            handle_arp(sr, packet, len, interface);
+            printf("Received ARP packet.\n");
+            handle_arp(sr, packet, interface, len);
             break;
         }
         /* IP packet */
         case ethertype_ip: {
+            printf("Received IP packet.\n");
             handle_ip(sr, packet, len, interface);
             break;
         }
