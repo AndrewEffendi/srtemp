@@ -79,23 +79,23 @@ struct sr_rt *longest_prefix_match(struct sr_instance *sr, uint32_t dest_addr) {
 
 /* Custom method: send packet to next_hop_ip, according to "sr_arpcache.h"
  * Check the ARP cache, send packet or send ARP request */
-void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, struct sr_if* interface, uint32_t dest_ip) {
-    struct sr_arpentry* arp_cached = sr_arpcache_lookup(&sr->cache, dest_ip);
+void lookup_and_send_packet(struct sr_instance *sr, uint32_t dst_ip, uint8_t *pkt, unsigned int len, struct sr_if *interface) {
+    struct sr_arpentry* arp_cached = sr_arpcache_lookup(&sr->cache, dst_ip);
 
     if(arp_cached) {
         /* if cached, send packet through outgoing interface */
         printf("ARP mapping cached.\n");
-        sr_ethernet_hdr_t* ehdr = (sr_ethernet_hdr_t*)packet;
+        sr_ethernet_hdr_t* ehdr = (sr_ethernet_hdr_t*)pkt;
         /* set destination MAC to the mapped MAC */
         memcpy(ehdr->ether_dhost, arp_cached->mac, ETHER_ADDR_LEN);
         /* set the source MAC to the outgoing interface's MAC */
         memcpy(ehdr->ether_shost, interface->addr, ETHER_ADDR_LEN);
-        sr_send_packet(sr, packet, len, interface->name);
+        sr_send_packet(sr, pkt, len, interface->name);
         free(arp_cached);
     } else {
         /* if not cached, send ARP request */
         printf("Queue ARP request.\n");
-        struct sr_arpreq* arpreq = sr_arpcache_queuereq(&sr->cache, dest_ip, packet, len, interface->name);
+        struct sr_arpreq* arpreq = sr_arpcache_queuereq(&sr->cache, dst_ip, pkt, len, interface->name);
         handle_arp_request(sr, arpreq);
     }
 }
@@ -145,7 +145,7 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             icmp_hdr->icmp_sum = 0;
             icmp_hdr->icmp_sum = cksum(icmp_hdr, ntohs(ip_hdr->ip_len) - (ip_hdr->ip_hl * 4));
             
-            send_packet(sr, packet, len, interface, rt_entry->gw.s_addr);
+            lookup_and_send_packet(sr, rt_entry->gw.s_addr, packet, len, interface);
             break;
         }
         case 11:
@@ -201,7 +201,7 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
             icmp_hdr->icmp_sum = 0;
             icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
 
-            send_packet(sr, new_packet, new_len, interface, rt_entry->gw.s_addr);
+            lookup_and_send_packet(sr, rt_entry->gw.s_addr, new_packet, new_len, interface);
             free(new_packet);
             break;
         }
@@ -239,7 +239,7 @@ void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned 
             memcpy(reply_arp_hdr->ar_tha, arp_hdr->ar_sha, sizeof(uint8_t) * ETHER_ADDR_LEN);
             reply_arp_hdr->ar_tip = arp_hdr->ar_sip;
 
-            send_packet(sr, reply_pkt, len, in_if, arp_hdr->ar_sip);
+            lookup_and_send_packet(sr, arp_hdr->ar_sip, reply_pkt, len, in_if);
             free(reply_pkt);
 
         } else if (htons(arp_hdr->ar_op) == arp_op_reply) {
@@ -340,7 +340,7 @@ void forward_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len) {
     if (route) {
         /* find routing table indicated interface */
         struct sr_if* interface = sr_get_interface(sr, route->interface);
-        send_packet(sr, pkt, len, interface, route->gw.s_addr);
+        lookup_and_send_packet(sr, route->gw.s_addr, pkt, len, interface);
     } else {
         /*LPM not found, send error type 3 code 0*/
         send_icmp_msg(sr, pkt, len, 3, 0);
