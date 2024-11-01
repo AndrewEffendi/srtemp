@@ -24,7 +24,7 @@ void handle_arp_request(struct sr_instance* sr, struct sr_arpreq* req) {
             sr_ethernet_hdr_t* packet_eth_hdr;
             while(packet) {
                 packet_eth_hdr = (sr_ethernet_hdr_t*)(packet->buf);
-                if(sr_get_interface_by_mac(sr, (unsigned char*)packet_eth_hdr->ether_dhost)) {
+                if(sr_get_interface_by_MAC(sr, (unsigned char*)packet_eth_hdr->ether_dhost)) {
                     send_icmp_msg(sr, packet->buf, packet->len, 3, 1);
                 }
                 packet = packet->next;

@@ -72,7 +72,7 @@ struct sr_if *sr_get_interface_by_IP(struct sr_instance *sr, uint32_t ip) {
     return 0;
 }
 
-struct sr_if *sr_get_interface_by_MAC(struct sr_instance *sr, uint32_t mac) {
+struct sr_if *sr_get_interface_by_MAC(struct sr_instance *sr, unsigned char* mac) {
     struct sr_if *if_walker = 0;
 
     /* -- REQUIRES -- */

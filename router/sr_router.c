@@ -288,15 +288,13 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
 }
 
 /*---------------------------------------------------------------------
- * This method processes incoming ARP packets received on a specified
- * interface. It sends replies for ARP requests, updates the ARP cache
- * for ARP replies
+ * handles arp request and reply
  *---------------------------------------------------------------------*/
 void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned int len) {
     sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
 
     /* Get the interface associated with the incoming ARP request's target IP */
-    struct sr_if *my_if = sr_get_interface_by_ip(sr, arp_hdr->ar_tip);
+    struct sr_if *my_if = sr_get_interface_by_IP(sr, arp_hdr->ar_tip);
 
     if (my_if) {
         if (ntohs(arp_hdr->ar_op) == arp_op_request) {
@@ -356,37 +354,36 @@ void handle_arp(struct sr_instance *sr, uint8_t *pkt, char *interface, unsigned 
     }
 }
 
-/* Custom method: handle IP packet */
-void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface) {
-    printf("Received IP packet.\n");
+/*---------------------------------------------------------------------
+ * handles ip packet
+ *---------------------------------------------------------------------*/
+void handle_ip(struct sr_instance *sr, uint8_t *pkt, unsigned int len, char *interface) {
+    sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
 
-    /* store the content of the packet (bypass the Ethernet hdr) */
-    uint8_t* payload = (packet + sizeof(sr_ethernet_hdr_t));
-    sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*) payload;
-
-    /* verify the IP hdr */
-    if(verify_ip(ip_hdr) == -1) {
+    if (!check_ip_len_cs(pkt, len)) {
+        printf("Packet is not valid.\n");
         return;
     }
 
-    /* check if packet's destination is this router */
-    struct sr_if* out_interface = sr_get_interface_by_ip(sr, ip_hdr->ip_dst);
-    if(out_interface) {
+    /* Check if the incoming packet is destined for this interface */
+    struct sr_if *my_if = sr_get_interface_by_IP(sr, ip_hdr->ip_dst);
+
+    if(my_if) {
         printf("Packet destined to this router.\n");
 
         switch(ip_hdr->ip_p) {
             case 0x0001: {
                 printf("Packet is an ICMP message.\n");
 
-                if(verify_icmp(packet, len) == -1) {
+                if(verify_icmp(pkt, len) == -1) {
                     return;
                 }
 
-                sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+                sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
                 /* handle 'ping' echo request */
                 if(icmp_hdr->icmp_type == 8) {
-                    send_icmp_msg(sr, packet, len, 0, (uint8_t)0);
+                    send_icmp_msg(sr, pkt, len, 0, (uint8_t)0);
                 }
 
                 break;
@@ -395,7 +392,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
             case 0x0011: {
                 printf("Packet is a TCP/UDP message.\n");
                 /* send ICMP msg - type 3 code 3 */
-                send_icmp_msg(sr, packet, len, 3, 3);
+                send_icmp_msg(sr, pkt, len, 3, 3);
                 break;
             }
         }
@@ -403,13 +400,13 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         printf("Packet destined elsewhere.\n");
 
         /* construct IP hdr (bypass Ethernet hdr) */
-        sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
+        sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(pkt + sizeof(sr_ethernet_hdr_t));
 
         /* decrease TTL */
         ip_hdr->ip_ttl--;
         if(ip_hdr->ip_ttl == 0) {
             printf("TTL decreased to zero.\n");
-            send_icmp_msg(sr, packet, len, 11, (uint8_t)0);
+            send_icmp_msg(sr, pkt, len, 11, (uint8_t)0);
             return;
         }
 
@@ -421,7 +418,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         struct sr_rt* table_entry = longest_prefix_match(sr, ip_hdr->ip_dst);
         if(!table_entry) {
             printf("Error: handle_ip: destination IP not existed in routing table.\n");
-            send_icmp_msg(sr, packet, len, 3, 0);
+            send_icmp_msg(sr, pkt, len, 3, 0);
             return;
         }
 
@@ -432,7 +429,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
             return;
         }
 
-        send_packet(sr, packet, len, rt_out_interface, table_entry->gw.s_addr);
+        send_packet(sr, pkt, len, rt_out_interface, table_entry->gw.s_addr);
     }
 }
 
