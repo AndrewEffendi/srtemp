@@ -114,7 +114,7 @@ int verify_icmp(uint8_t* packet, unsigned int len) {
 }
 
 /* Custom method: find the routing table entry which has the longest matching prefix with the destination IP addr */
-struct sr_rt* longest_matching_prefix(struct sr_instance* sr, uint32_t ip) {
+struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip) {
     struct sr_rt* longest_prefix_entry = NULL;
 
     char ip_string[15];
@@ -192,7 +192,7 @@ void send_icmp_msg(struct sr_instance* sr, uint8_t* packet, unsigned int len, ui
     sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
 
     /* get longest matching prefix of source IP */
-    struct sr_rt* rt_entry = longest_matching_prefix(sr, ip_hdr->ip_src);
+    struct sr_rt* rt_entry = longest_prefix_match(sr, ip_hdr->ip_src);
 
     if(!rt_entry) {
         printf("Error: send_icmp_msg: routing table entry not found.\n");
@@ -418,7 +418,7 @@ void handle_ip(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
 
         /* lookup destination IP in routing table */
-        struct sr_rt* table_entry = longest_matching_prefix(sr, ip_hdr->ip_dst);
+        struct sr_rt* table_entry = longest_prefix_match(sr, ip_hdr->ip_dst);
         if(!table_entry) {
             printf("Error: handle_ip: destination IP not existed in routing table.\n");
             send_icmp_msg(sr, packet, len, 3, 0);
@@ -488,3 +488,77 @@ void sr_handlepacket(struct sr_instance* sr,
     }
 }/* end sr_ForwardPacket */
 
+/*--------------------------------------------------------------------- 
+ * checkers: Return 1 if valid, 0 if not.
+ *---------------------------------------------------------------------*/
+/* Common checksum validation function */
+int validate_checksum(uint8_t *packet, unsigned int offset, unsigned int length, uint16_t old_cksm) {
+  uint16_t new_cksm = cksum(packet + offset, length);
+  return (old_cksm == new_cksm);
+}
+
+/* check eth length*/
+int check_eth_len(uint8_t *packet, unsigned int len) {
+  return (len >= sizeof(sr_ethernet_hdr_t));
+}
+
+/* check IP packet length and checksum*/
+int check_ip_len_cs(uint8_t *pkt, unsigned int len) {
+  if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) {
+    return 0;
+  }
+
+  sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
+  uint16_t old_cksm = ip_hdr->ip_sum;
+  ip_hdr->ip_sum = 0;
+
+  int valid = validate_checksum(pkt, sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t), old_cksm);
+  ip_hdr->ip_sum = old_cksm;
+
+  return valid;
+}
+
+/* check ICMP packet length and checksum*/
+int check_icmp_len_cs(uint8_t *pkt, int len) {
+  if (len < sizeof(sr_icmp_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) {
+    return 0;
+  }
+
+  sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+  uint16_t old_cksm = icmp_hdr->icmp_sum;
+  icmp_hdr->icmp_sum = 0;
+
+  sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
+  int valid = validate_checksum(pkt, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t), ntohs(ip_hdr->ip_len) - sizeof(sr_ip_hdr_t), old_cksm);
+  icmp_hdr->icmp_sum = old_cksm;
+
+  return valid;
+}
+
+/*--------------------------------------------------------------------- 
+ * Helper function to prepare Ethernet and IP header
+ *---------------------------------------------------------------------*/
+/* Helper function to prepare Ethernet header */
+void eth_header(sr_ethernet_hdr_t *eth_hdr, struct sr_if *interface, uint8_t *dest_mac) {
+  memcpy(eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+  memcpy(eth_hdr->ether_dhost, dest_mac, sizeof(uint8_t) * ETHER_ADDR_LEN);
+  eth_hdr->ether_type = htons(ethertype_ip);
+}
+
+/* Helper function to prepare IP header */
+void ip_header(sr_ip_hdr_t *ip_hdr, uint32_t src_ip, uint32_t dst_ip, uint16_t len, uint8_t ttl, uint8_t protocol) {
+  ip_hdr->ip_v = 4;
+  ip_hdr->ip_hl = sizeof(sr_ip_hdr_t) / 4;
+  ip_hdr->ip_len = htons(len);
+  ip_hdr->ip_tos = 0;
+  ip_hdr->ip_id = 0;
+  ip_hdr->ip_off = htons(IP_DF);
+  ip_hdr->ip_ttl = ttl;
+  ip_hdr->ip_p = protocol;
+  ip_hdr->ip_src = src_ip;
+  ip_hdr->ip_dst = dst_ip;
+  ip_hdr->ip_sum = 0;
+  ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+}
+
+/* ----------------------------------------------- */
