@@ -11,35 +11,31 @@
 #include "sr_if.h"
 #include "sr_protocol.h"
 
-/* Custom method: handle ARP request, send ARP requests if necessary, reference: "sr_arpcache.h" */
-void handle_arp_request(struct sr_instance* sr, struct sr_arpreq* request) {
-    /* record current time */
-    time_t current_time;
-    time(&current_time);
+/*
+ * Sends Arp Request, if resent >5 times, send type 3, Code 1 ICMP 
+ */
+void handle_arp_request(struct sr_instance* sr, struct sr_arpreq* req) {
+    time_t now = time(NULL);
 
-    if(difftime(current_time, request->sent) >= 1.0) {
-        if(request->times_sent >= 5) {
-            /* send 'ICMP host unreachable' to source MAC of all packets waiting on this request */
-            struct sr_packet* packet = request->packets;
+    if(difftime(now, req->sent) >= 1.0) {
+        if(req->times_sent >= 5) {
+            /* Send ICMP unreachable (type 3, code 1) to source of request */
+            struct sr_packet* packet = req->packets;
             sr_ethernet_hdr_t* packet_eth_hdr;
             while(packet) {
-                /* extract ethernet header from the packet */
                 packet_eth_hdr = (sr_ethernet_hdr_t*)(packet->buf);
-                /* extract the destination MAC from ethernet header, if the router can find the corresponding interface */
                 if(sr_get_interface_by_mac(sr, (unsigned char*)packet_eth_hdr->ether_dhost)) {
-                    /* send icmp dest_unreachable to packet's source */
                     send_icmp_msg(sr, packet->buf, packet->len, 3, 1);
                 }
-                /* default linked list structure of packet sr_packet in "sr_arpcache.h" */
                 packet = packet->next;
             }
-            sr_arpreq_destroy(&sr->cache, request);
+            /* Destroy the request */
+            sr_arpreq_destroy(&sr->cache, req);
         } else {
-            send_arp_request(sr, request);
-
-            /* update */
-            request->sent = current_time;
-            request->times_sent++;
+            /* Prepare and send an ARP request */
+            send_arp_request(sr, req);
+            req->sent = now;
+            req->times_sent++;
         }
     }
 }
@@ -324,4 +320,3 @@ void *sr_arpcache_timeout(void *sr_ptr) {
     
     return NULL;
 }
-
