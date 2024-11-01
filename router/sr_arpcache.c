@@ -44,44 +44,40 @@ void handle_arp_request(struct sr_instance* sr, struct sr_arpreq* request) {
     }
 }
 
+/*
+ * Constructs and sends an ARP request for the specified IP address.
+ */
 void send_arp_request(struct sr_instance *sr, struct sr_arpreq *req) {
-    /* send ARP request */
-    /* get the interface by name */
     struct sr_if* interface = sr_get_interface(sr, req->packets->iface);
-
-    /* construct ARP request */
-    int len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
-    uint8_t* arpreq = malloc(len);
+    uint8_t *pkt = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t));
+    
+    if (!pkt) {
+        fprintf(stderr, "Memory allocation failed for ARP request.\n");
+        return;
+    }
 
     /* construct ARP request ethernet header */
-    sr_ethernet_hdr_t* arpreq_eth_hdr = (sr_ethernet_hdr_t*)arpreq;
-    /* set destination MAC: FF-FF-FF-FF-FF-FF */
-    memset(arpreq_eth_hdr->ether_dhost, 0xFF, ETHER_ADDR_LEN);
-    /* set source MAC: outgoing interface's MAC */
-    memcpy(arpreq_eth_hdr->ether_shost, interface->addr, ETHER_ADDR_LEN);
-    arpreq_eth_hdr->ether_type = htons(ethertype_arp);
+    sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)pkt;
+    sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(pkt + sizeof(sr_ethernet_hdr_t));
 
-    /* construct ARP request ARP header */
-    sr_arp_hdr_t* arpreq_arp_hdr = (sr_arp_hdr_t*)(arpreq + sizeof(sr_ethernet_hdr_t));
-    /* values handled by htons() are all defined in "sr_protocol.h" */
-    arpreq_arp_hdr->ar_hrd = (unsigned short)htons(arp_hrd_ethernet);
-    arpreq_arp_hdr->ar_pro = (unsigned short)htons(ethertype_ip);
-    arpreq_arp_hdr->ar_hln = (unsigned char)ETHER_ADDR_LEN;
-    arpreq_arp_hdr->ar_pln = (unsigned char)sizeof(uint32_t);
-    arpreq_arp_hdr->ar_op = (unsigned short)htons(arp_op_request);
-    /* set sender MAC: outgoing interface's MAC */
-    memcpy(arpreq_arp_hdr->ar_sha, interface->addr, ETHER_ADDR_LEN);
-    /* set sender IP: outgoing interface's IP */
-    arpreq_arp_hdr->ar_sip = interface->ip;
-    /* set target MAC: 00-00-00-00-00-00 */
-    memset(arpreq_arp_hdr->ar_tha, 0x00, ETHER_ADDR_LEN);
-    /* set target IP: request's target IP */
-    arpreq_arp_hdr->ar_tip = req->ip;
+    /* Fill in Ethernet header: dest 0xFF (broadcast)*/
+    memcpy(eth_hdr->ether_shost, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    memset(eth_hdr->ether_dhost, 0xFF, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    eth_hdr->ether_type = htons(ethertype_arp);
+    
+    /* Fill in ARP header */
+    arp_hdr->ar_hrd = htons(arp_hrd_ethernet);
+    arp_hdr->ar_pro = htons(ethertype_ip);
+    arp_hdr->ar_hln = 6;
+    arp_hdr->ar_pln = 4;
+    arp_hdr->ar_op = htons(arp_op_request);
+    memcpy(arp_hdr->ar_sha, interface->addr, sizeof(uint8_t) * ETHER_ADDR_LEN);
+    arp_hdr->ar_sip = interface->ip;
+    arp_hdr->ar_tip = req->ip;
 
-    /* 'sr' send 'arpreq' ('len'-byte long) to the interface named 'interface->name' */
-    sr_send_packet(sr, arpreq, len, interface->name);
-    /* free the memory of arpreq after sending */
-    free(arpreq);
+    sr_send_packet(sr, pkt, sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t), interface->name);
+    
+    free(pkt);
 }
 
 /* 
